@@ -8,10 +8,13 @@
 .portal-shell {
   display: flex;
   height: 100vh;
-  height: 100dvh; /* mobile browser chrome shrinks the viewport; dvh tracks it */
+  height: 100dvh;
   overflow: hidden;
   background: var(--c-bg);
   color: var(--c-text-muted);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 .portal-shell__main {
@@ -38,6 +41,7 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0 0.625rem;
+  padding-top: env(safe-area-inset-top, 0px);
   background: var(--color-sidebar-bg);
   border-bottom: 1px solid var(--color-sidebar-border);
 }

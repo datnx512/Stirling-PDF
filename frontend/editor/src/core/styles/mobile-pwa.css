@@ -203,6 +203,24 @@ footer[class*="fixed"],
     padding: 8px !important;
   }
 
+  /* Mobile slider: fill available height between toggle and bottom bar */
+  .mobile-slider {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    height: 0 !important;
+  }
+
+  /* Mobile slide content: fill height */
+  .mobile-slide {
+    height: 100% !important;
+  }
+
+  /* Mobile files full: fill height */
+  .mobile-files-full {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+  }
+
   /* Text editor toolbar: horizontal scroll on mobile */
   [class*="text-editor-toolbar"],
   [class*="selection-toolbar"] {
