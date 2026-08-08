@@ -573,6 +573,8 @@ const createGroup = (
     fontMatrixSize: firstElement?.fontMatrixSize,
     color: firstElement ? extractColor(firstElement) : null,
     fontWeight: null, // Will be determined from font descriptor
+    opacity: firstElement?.opacity,
+    blendMode: firstElement?.blendMode,
     rotation,
     anchor,
     baselineLength,
@@ -604,161 +606,186 @@ const groupLinesIntoParagraphs = (
   }
 
   const paragraphs: TextGroup[][] = [];
-  let currentParagraph: TextGroup[] = [lineGroups[0]];
   const bulletFlags = new Map<string, boolean>();
-  bulletFlags.set(lineGroups[0].id, false);
 
-  for (let i = 1; i < lineGroups.length; i++) {
-    const prevLine = lineGroups[i - 1];
+  for (let i = 0; i < lineGroups.length; i++) {
     const currentLine = lineGroups[i];
 
-    // Calculate line spacing
-    const prevBaseline = prevLine.baseline ?? 0;
-    const currentBaseline = currentLine.baseline ?? 0;
-    const lineSpacing = Math.abs(prevBaseline - currentBaseline);
-
-    // Calculate average font size
-    const prevFontSize = prevLine.fontSize ?? 12;
-    const currentFontSize = currentLine.fontSize ?? 12;
-    const avgFontSize = (prevFontSize + currentFontSize) / 2;
-
-    // Check horizontal alignment (left edge)
-    const prevLeft = prevLine.bounds.left;
+    // Calculate current line metrics that don't depend on prevLine
     const currentLeft = currentLine.bounds.left;
-    const leftAlignmentTolerance = avgFontSize * 0.3;
-    const isLeftAligned =
-      Math.abs(prevLeft - currentLeft) <= leftAlignmentTolerance;
-
-    // Check if fonts match
-    const sameFont = prevLine.fontId === currentLine.fontId;
-
-    // Check for consistent spacing rather than expected spacing
-    // Line spacing in PDFs can range from 1.0x to 3.0x font size
-    // We just want to ensure spacing is consistent between consecutive lines
-    // and not excessively large (which would indicate a paragraph break)
-    const maxReasonableSpacing = avgFontSize * 3.0; // Max ~3x font size for normal line spacing
-    const hasReasonableSpacing = lineSpacing <= maxReasonableSpacing;
-
-    // Check if current line looks like a bullet/list item
-    const prevRight = prevLine.bounds.right;
     const currentRight = currentLine.bounds.right;
-    const prevWidth = prevRight - prevLeft;
     const currentWidth = currentRight - currentLeft;
-
-    // Count word count to help identify bullets (typically short)
-    const prevWords = (prevLine.text ?? "")
-      .split(/\s+/)
-      .filter((w) => w.length > 0).length;
+    const currentBaseline = currentLine.baseline ?? 0;
+    const currentFontSize = currentLine.fontSize ?? 12;
     const currentWords = (currentLine.text ?? "")
       .split(/\s+/)
       .filter((w) => w.length > 0).length;
-    const prevText = (prevLine.text ?? "").trim();
     const currentText = (currentLine.text ?? "").trim();
-
-    // Bullet detection - look for bullet markers or very short lines
     const bulletMarkerRegex =
       /^[\u2022\u2023\u25E6\u2043\u2219•·◦‣⁃\-*]\s|^\d+[.)]\s|^[a-z][.)]\s/i;
-    const prevHasBulletMarker = bulletMarkerRegex.test(prevText);
     const currentHasBulletMarker = bulletMarkerRegex.test(currentText);
 
-    // True bullets are:
-    // 1. Have bullet markers/numbers OR
-    // 2. Very short (< 10 words) AND much narrower than average (< 60% of page width)
-    const headingKeywords = [
-      "action items",
-      "next steps",
-      "notes",
-      "logistics",
-      "tasks",
-    ];
-    const normalizedPageWidth = pageWidth > 0 ? pageWidth : avgFontSize * 70;
-    const maxReferenceWidth =
-      normalizedPageWidth > 0 ? normalizedPageWidth : avgFontSize * 70;
-    const indentDelta = currentLeft - prevLeft;
-    const indentThreshold = Math.max(avgFontSize * 0.6, 8);
-    const hasIndent = indentDelta > indentThreshold;
-    const currentWidthRatio =
-      maxReferenceWidth > 0 ? currentWidth / maxReferenceWidth : 0;
-    const prevWidthRatio =
-      maxReferenceWidth > 0 ? prevWidth / maxReferenceWidth : 0;
-    const prevLooksLikeHeading =
-      prevText.endsWith(":") ||
-      (prevWords <= 4 && prevWidthRatio < 0.4) ||
-      headingKeywords.some((keyword) =>
-        prevText.toLowerCase().includes(keyword),
-      );
+    let bestMatchIndex = -1;
 
-    const wrapCandidate =
-      !currentHasBulletMarker &&
-      !hasIndent &&
-      !prevLooksLikeHeading &&
-      currentWords <= 12 &&
-      currentWidthRatio < 0.45 &&
-      Math.abs(prevLeft - currentLeft) <= leftAlignmentTolerance &&
-      currentWidth < prevWidth * 0.85;
+    // Look back at up to 3 recent paragraphs only
+    // (reduced from 10 to avoid merging text from unrelated sections/columns)
+    for (
+      let j = paragraphs.length - 1;
+      j >= Math.max(0, paragraphs.length - 3);
+      j--
+    ) {
+      const prevLine = paragraphs[j][paragraphs[j].length - 1];
 
-    const currentIsBullet = wrapCandidate
-      ? false
-      : currentHasBulletMarker ||
-        (hasIndent && (currentWords <= 14 || currentWidthRatio <= 0.65)) ||
-        (prevLooksLikeHeading &&
-          (currentWords <= 16 ||
-            currentWidthRatio <= 0.8 ||
-            prevWidthRatio < 0.35)) ||
-        (currentWords <= 8 &&
-          currentWidthRatio <= 0.45 &&
-          prevWidth - currentWidth > avgFontSize * 4);
+      // Calculate line spacing
+      const prevBaseline = prevLine.baseline ?? 0;
+      const lineSpacing = Math.abs(prevBaseline - currentBaseline);
 
-    const prevIsBullet = bulletFlags.get(prevLine.id) ?? prevHasBulletMarker;
-    bulletFlags.set(currentLine.id, currentIsBullet);
+      // Calculate average font size
+      const prevFontSize = prevLine.fontSize ?? 12;
+      const avgFontSize = (prevFontSize + currentFontSize) / 2;
 
-    // Detect paragraph→bullet transition
-    const likelyBulletStart = !prevIsBullet && currentIsBullet;
+      // Max ~1.8x font size for normal line spacing (tightened from 3.0x)
+      // This prevents merging text from different sections
+      const maxReasonableSpacing = avgFontSize * 1.8;
+      const hasReasonableSpacing = lineSpacing <= maxReasonableSpacing;
 
-    // Don't merge two consecutive bullets
-    const bothAreBullets = prevIsBullet && currentIsBullet;
+      // Hard break: if spacing exceeds 2.5x font size, it's a section boundary.
+      // Do NOT keep checking further paragraphs.
+      if (lineSpacing > avgFontSize * 2.5) {
+        break;
+      }
 
-    // Merge into paragraph if:
-    // 1. Left aligned
-    // 2. Same font
-    // 3. Reasonable line spacing
-    // 4. NOT transitioning to bullets
-    // 5. NOT both are bullets
-    const shouldMerge =
-      isLeftAligned &&
-      sameFont &&
-      hasReasonableSpacing &&
-      !likelyBulletStart &&
-      !bothAreBullets &&
-      !currentIsBullet;
+      // Font size guard: if font sizes differ by more than 15%, they belong to
+      // different logical levels (e.g. heading vs body) – never merge.
+      const fontSizeRatio =
+        prevFontSize > 0 ? currentFontSize / prevFontSize : 1;
+      const fontSizeMismatch = fontSizeRatio < 0.85 || fontSizeRatio > 1.15;
+      if (fontSizeMismatch) {
+        continue;
+      }
 
-    if (i < 10 || likelyBulletStart || bothAreBullets || !shouldMerge) {
-      console.log(`  Line ${i}:`);
-      console.log(
-        `    prev: "${prevText.substring(0, 40)}" (${prevWords}w, ${prevWidth.toFixed(0)}pt, marker:${prevHasBulletMarker}, bullet:${prevIsBullet})`,
-      );
-      console.log(
-        `    curr: "${currentText.substring(0, 40)}" (${currentWords}w, ${currentWidth.toFixed(0)}pt, marker:${currentHasBulletMarker}, bullet:${currentIsBullet})`,
-      );
-      console.log(
-        `    checks: leftAlign:${isLeftAligned} (${Math.abs(prevLeft - currentLeft).toFixed(1)}pt), sameFont:${sameFont}, spacing:${hasReasonableSpacing} (${lineSpacing.toFixed(1)}pt/${maxReasonableSpacing.toFixed(1)}pt)`,
-      );
-      console.log(
-        `    decision: merge=${shouldMerge} (bulletStart:${likelyBulletStart}, bothBullets:${bothAreBullets})`,
-      );
+      // Check horizontal alignments
+      const prevLeft = prevLine.bounds.left;
+      const alignmentTolerance = avgFontSize * 0.4;
+      const isLeftAligned =
+        Math.abs(prevLeft - currentLeft) <= alignmentTolerance;
+
+      const prevRight = prevLine.bounds.right;
+      const isRightAligned =
+        Math.abs(prevRight - currentRight) <= alignmentTolerance;
+
+      const prevCenter = (prevLeft + prevRight) / 2;
+      const currentCenter = (currentLeft + currentRight) / 2;
+      const isCenterAligned =
+        Math.abs(prevCenter - currentCenter) <= alignmentTolerance;
+
+      const isAligned = isLeftAligned || isRightAligned || isCenterAligned;
+
+      // Multi-column guard: if the horizontal gap between the end of prevLine
+      // and the start of currentLine exceeds 25% of page width, they are likely
+      // in separate columns – never merge.
+      const normalizedPageWidth = pageWidth > 0 ? pageWidth : avgFontSize * 70;
+      const horizontalGap = Math.abs(currentLeft - prevRight);
+      const isMultiColumnGap =
+        normalizedPageWidth > 0 &&
+        horizontalGap > normalizedPageWidth * 0.25 &&
+        !isLeftAligned;
+      if (isMultiColumnGap) {
+        continue;
+      }
+
+      const sameFont = prevLine.fontId === currentLine.fontId;
+      const prevWidth = prevRight - prevLeft;
+
+      const prevWords = (prevLine.text ?? "")
+        .split(/\s+/)
+        .filter((w) => w.length > 0).length;
+      const prevText = (prevLine.text ?? "").trim();
+      const prevHasBulletMarker = bulletMarkerRegex.test(prevText);
+
+      const headingKeywords = [
+        "action items",
+        "next steps",
+        "notes",
+        "logistics",
+        "tasks",
+      ];
+      const maxReferenceWidth =
+        normalizedPageWidth > 0 ? normalizedPageWidth : avgFontSize * 70;
+      const indentDelta = currentLeft - prevLeft;
+      const indentThreshold = Math.max(avgFontSize * 0.6, 8);
+      const hasIndent = indentDelta > indentThreshold;
+
+      const currentWidthRatio =
+        maxReferenceWidth > 0 ? currentWidth / maxReferenceWidth : 0;
+      const prevWidthRatio =
+        maxReferenceWidth > 0 ? prevWidth / maxReferenceWidth : 0;
+
+      const prevLooksLikeHeading =
+        prevText.endsWith(":") ||
+        (prevWords <= 4 && prevWidthRatio < 0.4) ||
+        headingKeywords.some((keyword) =>
+          prevText.toLowerCase().includes(keyword),
+        );
+
+      const wrapCandidate =
+        !currentHasBulletMarker &&
+        !hasIndent &&
+        !prevLooksLikeHeading &&
+        currentWords <= 12 &&
+        currentWidthRatio < 0.45 &&
+        isAligned &&
+        currentWidth < prevWidth * 0.85;
+
+      const currentIsBullet = wrapCandidate
+        ? false
+        : currentHasBulletMarker ||
+          (hasIndent && (currentWords <= 14 || currentWidthRatio <= 0.65)) ||
+          (prevLooksLikeHeading &&
+            (currentWords <= 16 ||
+              currentWidthRatio <= 0.8 ||
+              prevWidthRatio < 0.35)) ||
+          (currentWords <= 8 &&
+            currentWidthRatio <= 0.45 &&
+            prevWidth - currentWidth > avgFontSize * 4);
+
+      const prevIsBullet = bulletFlags.get(prevLine.id) ?? prevHasBulletMarker;
+
+      const likelyBulletStart = !prevIsBullet && currentIsBullet;
+      const bothAreBullets = prevIsBullet && currentIsBullet;
+
+      const shouldMerge =
+        isAligned &&
+        sameFont &&
+        hasReasonableSpacing &&
+        !likelyBulletStart &&
+        !bothAreBullets &&
+        !currentIsBullet;
+
+      if (shouldMerge) {
+        bestMatchIndex = j;
+        bulletFlags.set(currentLine.id, currentIsBullet);
+        break; // found the match
+      }
     }
 
-    if (shouldMerge) {
-      currentParagraph.push(currentLine);
+    if (bestMatchIndex !== -1) {
+      paragraphs[bestMatchIndex].push(currentLine);
     } else {
-      paragraphs.push(currentParagraph);
-      currentParagraph = [currentLine];
-    }
-  }
+      paragraphs.push([currentLine]);
 
-  // Don't forget the last paragraph
-  if (currentParagraph.length > 0) {
-    paragraphs.push(currentParagraph);
+      // Compute standalone bullet status
+      const normalizedPageWidth =
+        pageWidth > 0 ? pageWidth : currentFontSize * 70;
+      const currentWidthRatio =
+        normalizedPageWidth > 0 ? currentWidth / normalizedPageWidth : 0;
+      const isBullet =
+        currentHasBulletMarker ||
+        (currentWords <= 14 &&
+          currentWidthRatio <= 0.65 &&
+          !!currentText.match(/^[a-z0-9]/i));
+      bulletFlags.set(currentLine.id, isBullet);
+    }
   }
 
   // Merge line groups into single paragraph groups

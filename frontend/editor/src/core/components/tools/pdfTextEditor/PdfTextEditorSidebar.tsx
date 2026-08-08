@@ -10,6 +10,8 @@ import {
   Stack,
   Switch,
   Text,
+  TextInput,
+  Checkbox,
 } from "@mantine/core";
 import { Button } from "@app/ui/Button";
 import { ActionIcon } from "@app/ui/ActionIcon";
@@ -70,6 +72,12 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
   const [advancedSettingsCollapsed, setAdvancedSettingsCollapsed] =
     useState(false);
   const [fontsCollapsed, setFontsCollapsed] = useState(false);
+  const [searchReplaceCollapsed, setSearchReplaceCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [replaceQuery, setReplaceQuery] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
+  const [lastReplaceCount, setLastReplaceCount] = useState<number | null>(null);
+
   const pdfTextEditorTips = usePdfTextEditorTips();
 
   const {
@@ -91,6 +99,8 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
     onForceSingleTextElementChange,
     onGroupingModeChange,
     onAutoScaleTextChange,
+    serverPreviewEnabled,
+    onServerPreviewEnabledChange,
   } = data;
 
   // Get page dimensions
@@ -173,6 +183,82 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
 
             <ToolStep
               title={t(
+                "pdfTextEditor.options.searchReplace.title",
+                "Search & Replace",
+              )}
+              isCollapsed={searchReplaceCollapsed}
+              onCollapsedClick={() =>
+                setSearchReplaceCollapsed(!searchReplaceCollapsed)
+              }
+            >
+              <Stack gap="md">
+                <TextInput
+                  label={t(
+                    "pdfTextEditor.options.searchReplace.search",
+                    "Search for",
+                  )}
+                  placeholder={t(
+                    "pdfTextEditor.options.searchReplace.searchPlaceholder",
+                    "Text to find...",
+                  )}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.currentTarget.value)}
+                />
+                <TextInput
+                  label={t(
+                    "pdfTextEditor.options.searchReplace.replace",
+                    "Replace with",
+                  )}
+                  placeholder={t(
+                    "pdfTextEditor.options.searchReplace.replacePlaceholder",
+                    "Replacement text...",
+                  )}
+                  value={replaceQuery}
+                  onChange={(e) => setReplaceQuery(e.currentTarget.value)}
+                />
+                <Group justify="space-between">
+                  <Checkbox
+                    label={t(
+                      "pdfTextEditor.options.searchReplace.matchCase",
+                      "Match case",
+                    )}
+                    checked={matchCase}
+                    onChange={(e) => setMatchCase(e.currentTarget.checked)}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={!searchQuery || !data.onReplaceAll}
+                    onClick={() => {
+                      if (data.onReplaceAll) {
+                        const count = data.onReplaceAll(
+                          searchQuery,
+                          replaceQuery,
+                          matchCase,
+                        );
+                        setLastReplaceCount(count);
+                      }
+                    }}
+                  >
+                    {t(
+                      "pdfTextEditor.options.searchReplace.replaceAll",
+                      "Replace All",
+                    )}
+                  </Button>
+                </Group>
+                {lastReplaceCount !== null && (
+                  <Text size="sm" c="dimmed">
+                    {t(
+                      "pdfTextEditor.options.searchReplace.result",
+                      "Replaced {{count}} occurrences",
+                      { count: lastReplaceCount },
+                    )}
+                  </Text>
+                )}
+              </Stack>
+            </ToolStep>
+
+            <ToolStep
+              title={t(
                 "pdfTextEditor.options.advanced.title",
                 "Advanced Settings",
               )}
@@ -221,6 +307,50 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
                     checked={autoScaleText}
                     onChange={(event) =>
                       onAutoScaleTextChange(event.currentTarget.checked)
+                    }
+                  />
+                </Group>
+
+                <Divider />
+
+                <Group justify="space-between" align="center">
+                  <Group
+                    gap={4}
+                    align="center"
+                    style={{ flex: 1, minWidth: 0 }}
+                  >
+                    <Tooltip
+                      sidebarTooltip={false}
+                      content={t(
+                        "pdfTextEditor.options.serverPreview.description",
+                        "Fetches exactly what the exported PDF will look like from the server, giving 100% fidelity. React text blocks will be hidden when not focused.",
+                      )}
+                      position="top"
+                    >
+                      <ActionIcon
+                        variant="tertiary"
+                        size="sm"
+                        aria-label={t(
+                          "pdfTextEditor.options.serverPreview.title",
+                          "High Fidelity Server Preview",
+                        )}
+                        style={{ flexShrink: 0 }}
+                      >
+                        <InfoOutlinedIcon fontSize="small" />
+                      </ActionIcon>
+                    </Tooltip>
+                    <Text fw={500} size="sm" style={{ flex: 1 }}>
+                      {t(
+                        "pdfTextEditor.options.serverPreview.title",
+                        "High Fidelity Server Preview",
+                      )}
+                    </Text>
+                  </Group>
+                  <Switch
+                    size="md"
+                    checked={serverPreviewEnabled}
+                    onChange={(event) =>
+                      onServerPreviewEnabledChange(event.currentTarget.checked)
                     }
                   />
                 </Group>

@@ -24,6 +24,7 @@ import apiClient from "@app/services/apiClient";
 import { downloadBlob, downloadTextAsFile } from "@app/utils/downloadUtils";
 import { getFilenameFromHeaders } from "@app/utils/fileResponseUtils";
 import { pdfWorkerManager } from "@app/services/pdfWorkerManager";
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { Util } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   PdfJsonDocument,
@@ -45,6 +46,10 @@ import {
   cloneTextElement,
   valueOr,
 } from "@app/tools/pdfTextEditor/pdfTextEditorUtils";
+import {
+  usePdfEditorHistory,
+  EditorHistoryState,
+} from "@app/tools/pdfTextEditor/usePdfEditorHistory";
 import PdfTextEditorView from "@app/components/tools/pdfTextEditor/PdfTextEditorView";
 import PdfTextEditorSidebar from "@app/components/tools/pdfTextEditor/PdfTextEditorSidebar";
 import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -262,6 +267,40 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
   );
   const [groupsByPage, setGroupsByPage] = useState<TextGroup[][]>([]);
   const [imagesByPage, setImagesByPage] = useState<PdfJsonImageElement[][]>([]);
+  const imagesByPageRef = useRef<PdfJsonImageElement[][]>([]);
+  const originalImagesRef = useRef<PdfJsonImageElement[][]>([]);
+  const originalGroupsRef = useRef<TextGroup[][]>([]);
+  const groupsByPageRef = useRef<TextGroup[][]>([]);
+
+  const historyInitialState = useMemo(
+    () => ({ groupsByPage: [], imagesByPage: [] }),
+    [],
+  );
+
+  const historyOnChange = useCallback((state: EditorHistoryState) => {
+    setGroupsByPage(state.groupsByPage);
+    setImagesByPage(state.imagesByPage);
+    imagesByPageRef.current = state.imagesByPage.map((page) =>
+      page ? [...page] : [],
+    );
+  }, []);
+
+  const { pushState, undo, redo, canUndo, canRedo } = usePdfEditorHistory(
+    historyInitialState,
+    historyOnChange,
+  );
+
+  const commitHistory = useCallback(() => {
+    pushState({
+      groupsByPage: groupsByPageRef.current.map((page) =>
+        page ? [...page] : [],
+      ),
+      imagesByPage: imagesByPageRef.current.map((page) =>
+        page ? [...page] : [],
+      ),
+    });
+  }, [pushState]);
+
   const [selectedPage, setSelectedPage] = useState(0);
   const [fileName, setFileName] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -280,6 +319,7 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
     new Map(),
   );
   const [autoScaleText, setAutoScaleText] = useState(true);
+  const [serverPreviewEnabled, setServerPreviewEnabled] = useState(false);
 
   // Lazy loading state
   const [isLazyMode, setIsLazyMode] = useState(false);
@@ -291,9 +331,6 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
     new Set(),
   );
 
-  const originalImagesRef = useRef<PdfJsonImageElement[][]>([]);
-  const originalGroupsRef = useRef<TextGroup[][]>([]);
-  const imagesByPageRef = useRef<PdfJsonImageElement[][]>([]);
   const lastLoadedFileRef = useRef<File | null>(null);
   const autoLoadKeyRef = useRef<string | null>(null);
   const sourceFileIdRef = useRef<FileId | null>(null);
@@ -305,6 +342,9 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
   const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null);
   const previewRequestIdRef = useRef(0);
   const previewRenderingRef = useRef<Set<number>>(new Set());
+  const requestPagePreviewRef = useRef<
+    ((pageIndex: number, scale: number) => Promise<void>) | null
+  >(null);
   const pagePreviewsRef = useRef<Map<number, string>>(pagePreviews);
   const previewScaleRef = useRef<Map<number, number>>(new Map());
   const cachedJobIdRef = useRef<string | null>(null);
@@ -331,6 +371,10 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
   useEffect(() => {
     pagePreviewsRef.current = pagePreviews;
   }, [pagePreviews]);
+
+  useEffect(() => {
+    groupsByPageRef.current = groupsByPage;
+  }, [groupsByPage]);
 
   useEffect(() => {
     return () => {
@@ -444,6 +488,7 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
         }
       });
       setGroupsByPage(groups);
+      groupsByPageRef.current = groups;
       setImagesByPage(images);
       setLoadedImagePages(initialLoaded);
       setLoadingImagePages(new Set());
@@ -988,6 +1033,34 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
               ),
         ),
       );
+      const scale = previewScaleRef.current.get(pageIndex);
+      previewScaleRef.current.delete(pageIndex);
+      previewRenderingRef.current.delete(pageIndex);
+      if (scale) {
+        // Use setTimeout to allow state to settle before requesting preview
+        setTimeout(() => requestPagePreviewRef.current?.(pageIndex, scale), 0);
+      }
+    },
+    [],
+  );
+
+  const handleGroupFormatChange = useCallback(
+    (pageIndex: number, groupId: string, format: Partial<TextGroup>) => {
+      setGroupsByPage((previous) =>
+        previous.map((groups, idx) =>
+          idx !== pageIndex
+            ? groups
+            : groups.map((group) =>
+                group.id === groupId ? { ...group, ...format } : group,
+              ),
+        ),
+      );
+      const scale = previewScaleRef.current.get(pageIndex);
+      previewScaleRef.current.delete(pageIndex);
+      previewRenderingRef.current.delete(pageIndex);
+      if (scale) {
+        setTimeout(() => requestPagePreviewRef.current?.(pageIndex, scale), 0);
+      }
     },
     [],
   );
@@ -1006,8 +1079,157 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
         });
         return updated;
       });
+      const scale = previewScaleRef.current.get(pageIndex);
+      previewScaleRef.current.delete(pageIndex);
+      previewRenderingRef.current.delete(pageIndex);
+      if (scale) {
+        setTimeout(() => requestPagePreviewRef.current?.(pageIndex, scale), 0);
+      }
     },
     [],
+  );
+
+  const handleAddText = useCallback(
+    (pageIndex: number, x: number, y: number, text?: string) => {
+      const newGroupId = `new-text-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      const defaultText = text || "New Text";
+
+      const newGroup: TextGroup = {
+        id: newGroupId,
+        pageIndex,
+        fontId: "Helvetica",
+        fontSize: 16,
+        color: "rgb(0, 0, 0)",
+        fontWeight: "normal",
+        rotation: 0,
+        opacity: 1,
+        blendMode: "Normal",
+        elements: [],
+        originalElements: [],
+        text: defaultText,
+        originalText: "",
+        bounds: { left: x, right: x + 100, top: y - 16, bottom: y },
+      };
+
+      setGroupsByPage((previous) =>
+        previous.map((groups, idx) =>
+          idx !== pageIndex ? groups : [...groups, newGroup],
+        ),
+      );
+
+      const scale = previewScaleRef.current.get(pageIndex);
+      previewScaleRef.current.delete(pageIndex);
+      previewRenderingRef.current.delete(pageIndex);
+      if (scale) {
+        setTimeout(() => requestPagePreviewRef.current?.(pageIndex, scale), 0);
+      }
+    },
+    [],
+  );
+
+  const handleAddImage = useCallback(
+    (pageIndex: number, file: File, x: number, y: number) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        if (!dataUrl) return;
+
+        const img = new Image();
+        img.onload = () => {
+          const newImageId = `new-img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          const newImage: PdfJsonImageElement = {
+            id: newImageId,
+            objectName: file.name,
+            imageData: dataUrl.split(",")[1], // Base64 data
+            imageFormat: file.type.split("/")[1] || "png",
+            left: x,
+            bottom: y - img.height, // Approximate bottom
+            width: img.width,
+            height: img.height,
+            opacity: 1,
+            blendMode: "Normal",
+          };
+
+          setImagesByPage((previous) =>
+            previous.map((images, idx) =>
+              idx !== pageIndex ? images : [...images, newImage],
+            ),
+          );
+
+          const scale = previewScaleRef.current.get(pageIndex);
+          previewScaleRef.current.delete(pageIndex);
+          previewRenderingRef.current.delete(pageIndex);
+          if (scale) {
+            setTimeout(
+              () => requestPagePreviewRef.current?.(pageIndex, scale),
+              0,
+            );
+          }
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    },
+    [],
+  );
+
+  const handleReplaceAll = useCallback(
+    (search: string, replace: string, matchCase: boolean = false): number => {
+      if (!search) return 0;
+
+      let replacedCount = 0;
+      const regexFlags = matchCase ? "g" : "gi";
+      const escapeRegExp = (str: string) =>
+        str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(escapeRegExp(search), regexFlags);
+
+      setGroupsByPage((previous) => {
+        let hasAnyChanges = false;
+        const newGroupsByPage = previous.map((groups, pageIndex) => {
+          let pageChanged = false;
+          const newGroups = groups.map((group) => {
+            if (!group.text) return group;
+
+            if (regex.test(group.text)) {
+              pageChanged = true;
+              hasAnyChanges = true;
+              return { ...group, text: group.text.replace(regex, replace) };
+            }
+            return group;
+          });
+
+          if (pageChanged) {
+            const scale = previewScaleRef.current.get(pageIndex);
+            previewScaleRef.current.delete(pageIndex);
+            previewRenderingRef.current.delete(pageIndex);
+            if (scale) {
+              setTimeout(
+                () => requestPagePreviewRef.current?.(pageIndex, scale),
+                0,
+              );
+            }
+          }
+          return newGroups;
+        });
+
+        if (hasAnyChanges) {
+          setTimeout(commitHistory, 0);
+        }
+        return hasAnyChanges ? newGroupsByPage : previous;
+      });
+
+      groupsByPage.forEach((groups) => {
+        groups.forEach((group) => {
+          if (group.text) {
+            const matches = group.text.match(regex);
+            if (matches) replacedCount += matches.length;
+          }
+        });
+      });
+
+      return replacedCount;
+    },
+    [groupsByPage, commitHistory],
   );
 
   const handleMergeGroups = useCallback(
@@ -1730,7 +1952,43 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
       }
       previewRenderingRef.current.add(pageIndex);
       try {
-        const page = await pdfDocumentRef.current.getPage(pageIndex + 1);
+        let pdfjsDocToUse = pdfDocumentRef.current;
+        let pageNumberToUse = pageIndex + 1;
+        const isDirty = dirtyPages[pageIndex];
+
+        if (serverPreviewEnabled && isLazyMode && cachedJobId && isDirty) {
+          const payload = buildPayload();
+          if (payload) {
+            const { document: docPayload } = payload;
+            const singlePage = docPayload.pages?.find(
+              (p) => p.pageNumber === pageIndex + 1,
+            );
+            if (singlePage) {
+              const partialDocument = { pages: [singlePage] };
+              try {
+                const response = await apiClient.post(
+                  `/api/v1/convert/pdf/text-editor/partial-page/${cachedJobId}/${pageIndex + 1}`,
+                  partialDocument,
+                  { responseType: "blob" },
+                );
+                const pdfBytes = new Uint8Array(
+                  await response.data.arrayBuffer(),
+                );
+                pdfjsDocToUse = await pdfjsLib.getDocument({ data: pdfBytes })
+                  .promise;
+                pageNumberToUse = 1;
+              } catch (err) {
+                console.error(
+                  "Failed to fetch server preview for page",
+                  pageIndex,
+                  err,
+                );
+              }
+            }
+          }
+        }
+
+        const page = await pdfjsDocToUse.getPage(pageNumberToUse);
         const viewport = page.getViewport({ scale: Math.max(scale, 0.5) });
         const canvas = document.createElement("canvas");
         canvas.width = viewport.width;
@@ -1742,88 +2000,91 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
         }
         await page.render({ canvas, canvasContext: context, viewport }).promise;
 
-        try {
-          const textContent = await page.getTextContent();
-          const maskMarginX = 0;
-          const maskMarginTop = 0;
-          const maskMarginBottom = Math.max(3 * scale, 3);
-          context.save();
-          context.globalCompositeOperation = "destination-out";
-          context.fillStyle = "#000000";
-          for (const item of textContent.items) {
-            // Skip TextMarkedContent items, only process TextItem
-            if (!("transform" in item)) continue;
-
-            const transform = Util.transform(
-              viewport.transform,
-              item.transform,
-            );
-            const a = transform[0];
-            const b = transform[1];
-            const c = transform[2];
-            const d = transform[3];
-            const e = transform[4];
-            const f = transform[5];
-            const angle = Math.atan2(b, a);
-
-            const width = (item.width || 0) * viewport.scale + maskMarginX * 2;
-            const fontHeight = Math.hypot(c, d);
-            const rawHeight = item.height
-              ? item.height * viewport.scale
-              : fontHeight;
-            const height = Math.max(
-              rawHeight + maskMarginTop + maskMarginBottom,
-              fontHeight + maskMarginTop + maskMarginBottom,
-            );
-            const baselineOffset = height - maskMarginBottom;
-
-            context.save();
-            context.translate(e, f);
-            context.rotate(angle);
-            context.fillRect(-maskMarginX, -baselineOffset, width, height);
-            context.restore();
-          }
-          context.restore();
-        } catch (textError) {
-          console.warn(
-            "[PdfTextEditor] Failed to strip text from preview",
-            textError,
-          );
-        }
-
-        // Also mask out images to prevent ghost/shadow images when they're moved
-        try {
-          const pageImages = imagesByPage[pageIndex] ?? [];
-          if (pageImages.length > 0) {
+        if (!serverPreviewEnabled) {
+          try {
+            const textContent = await page.getTextContent();
+            const maskMarginX = 0;
+            const maskMarginTop = 0;
+            const maskMarginBottom = Math.max(3 * scale, 3);
             context.save();
             context.globalCompositeOperation = "destination-out";
             context.fillStyle = "#000000";
-            for (const image of pageImages) {
-              if (!image) continue;
-              // Get image bounds in PDF coordinates
-              const left = image.left ?? image.x ?? 0;
-              const bottom = image.bottom ?? image.y ?? 0;
-              const width =
-                image.width ?? Math.max((image.right ?? left) - left, 0);
-              const height =
-                image.height ?? Math.max((image.top ?? bottom) - bottom, 0);
-              const _right = left + width;
-              const top = bottom + height;
+            for (const item of textContent.items) {
+              // Skip TextMarkedContent items, only process TextItem
+              if (!("transform" in item)) continue;
 
-              // Convert to canvas coordinates (PDF origin is bottom-left, canvas is top-left)
-              const canvasX = left * scale;
-              const canvasY = canvas.height - top * scale;
-              const canvasWidth = width * scale;
-              const canvasHeight = height * scale;
-              context.fillRect(canvasX, canvasY, canvasWidth, canvasHeight);
+              const transform = Util.transform(
+                viewport.transform,
+                item.transform,
+              );
+              const a = transform[0];
+              const b = transform[1];
+              const c = transform[2];
+              const d = transform[3];
+              const e = transform[4];
+              const f = transform[5];
+              const angle = Math.atan2(b, a);
+
+              const width =
+                (item.width || 0) * viewport.scale + maskMarginX * 2;
+              const fontHeight = Math.hypot(c, d);
+              const rawHeight = item.height
+                ? item.height * viewport.scale
+                : fontHeight;
+              const height = Math.max(
+                rawHeight + maskMarginTop + maskMarginBottom,
+                fontHeight + maskMarginTop + maskMarginBottom,
+              );
+              const baselineOffset = height - maskMarginBottom;
+
+              context.save();
+              context.translate(e, f);
+              context.rotate(angle);
+              context.fillRect(-maskMarginX, -baselineOffset, width, height);
+              context.restore();
             }
             context.restore();
+          } catch (textError) {
+            console.warn(
+              "[PdfTextEditor] Failed to strip text from preview",
+              textError,
+            );
           }
-        } catch (imageError) {
-          console.warn(
-            "[PdfTextEditor] Failed to strip images from preview",
-            imageError,
-          );
+
+          // Also mask out images to prevent ghost/shadow images when they're moved
+          try {
+            const pageImages = imagesByPage[pageIndex] ?? [];
+            if (pageImages.length > 0) {
+              context.save();
+              context.globalCompositeOperation = "destination-out";
+              context.fillStyle = "#000000";
+              for (const image of pageImages) {
+                if (!image) continue;
+                // Get image bounds in PDF coordinates
+                const left = image.left ?? image.x ?? 0;
+                const bottom = image.bottom ?? image.y ?? 0;
+                const width =
+                  image.width ?? Math.max((image.right ?? left) - left, 0);
+                const height =
+                  image.height ?? Math.max((image.top ?? bottom) - bottom, 0);
+                const _right = left + width;
+                const top = bottom + height;
+
+                // Convert to canvas coordinates (PDF origin is bottom-left, canvas is top-left)
+                const canvasX = left * scale;
+                const canvasY = canvas.height - top * scale;
+                const canvasWidth = width * scale;
+                const canvasHeight = height * scale;
+                context.fillRect(canvasX, canvasY, canvasWidth, canvasHeight);
+              }
+              context.restore();
+            }
+          } catch (imageError) {
+            console.warn(
+              "[PdfTextEditor] Failed to strip images from preview",
+              imageError,
+            );
+          }
         }
         const dataUrl = canvas.toDataURL("image/png");
         page.cleanup();
@@ -1837,13 +2098,23 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
           return next;
         });
       } catch (error) {
-        console.warn("[PdfTextEditor] Failed to render page preview", error);
-      } finally {
+        console.error("Failed to render page preview", error);
         previewRenderingRef.current.delete(pageIndex);
       }
     },
-    [hasVectorPreview, imagesByPage],
+    [
+      buildPayload,
+      cachedJobId,
+      dirtyPages,
+      hasVectorPreview,
+      isLazyMode,
+      serverPreviewEnabled,
+    ],
   );
+
+  useEffect(() => {
+    requestPagePreviewRef.current = requestPagePreview;
+  }, [requestPagePreview]);
 
   // Re-group text when grouping mode changes without forcing a full reload
   useEffect(() => {
@@ -1874,9 +2145,12 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
       groupingMode,
       autoScaleText,
       onAutoScaleTextChange: setAutoScaleText,
+      serverPreviewEnabled,
+      onServerPreviewEnabledChange: setServerPreviewEnabled,
       requestPagePreview,
       onSelectPage: handleSelectPage,
       onGroupEdit: handleGroupTextChange,
+      onGroupFormatChange: handleGroupFormatChange,
       onGroupDelete: handleGroupDelete,
       onImageTransform: handleImageTransform,
       onImageReset: handleImageReset,
@@ -1893,6 +2167,14 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
       onMergeGroups: handleMergeGroups,
       onUngroupGroup: handleUngroupGroup,
       onLoadFile: handleLoadFileFromDropzone,
+      canUndo,
+      canRedo,
+      onUndo: undo,
+      onRedo: redo,
+      onCommitHistory: commitHistory,
+      onAddText: handleAddText,
+      onAddImage: handleAddImage,
+      onReplaceAll: handleReplaceAll,
     }),
     [
       handleMergeGroups,
@@ -1909,6 +2191,7 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
       handleDownloadJson,
       handleGeneratePdf,
       handleGroupTextChange,
+      handleGroupFormatChange,
       handleGroupDelete,
       handleImageReset,
       handleResetEdits,
@@ -1927,8 +2210,26 @@ const PdfTextEditor = ({ onComplete, onError }: BaseToolProps) => {
       requestPagePreview,
       setForceSingleTextElement,
       handleLoadFileFromDropzone,
+      canUndo,
+      canRedo,
+      undo,
+      redo,
+      commitHistory,
+      serverPreviewEnabled,
+      handleAddText,
+      handleAddImage,
     ],
   );
+
+  useEffect(() => {
+    // When server preview mode is toggled, invalidate all current previews and re-request them
+    const scales = new Map(previewScaleRef.current);
+    previewScaleRef.current.clear();
+    previewRenderingRef.current.clear();
+    scales.forEach((scale, pageIndex) => {
+      void requestPagePreview(pageIndex, scale);
+    });
+  }, [serverPreviewEnabled, requestPagePreview]);
 
   const latestViewDataRef = useRef<PdfTextEditorViewData>(viewData);
   latestViewDataRef.current = viewData;

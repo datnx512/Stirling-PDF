@@ -67,6 +67,8 @@ export interface PdfJsonTextElement {
   strokeColor?: PdfJsonTextColor | null;
   charCodes?: number[] | null;
   fallbackUsed?: boolean | null;
+  opacity?: number | null;
+  blendMode?: string | null;
 }
 
 export interface PdfJsonImageElement {
@@ -87,6 +89,8 @@ export interface PdfJsonImageElement {
   zOrder?: number | null;
   imageData?: string | null;
   imageFormat?: string | null;
+  opacity?: number | null;
+  blendMode?: string | null;
 }
 
 export interface PdfJsonStream {
@@ -161,6 +165,11 @@ export interface TextGroup {
   lineElementCounts?: number[] | null;
   color?: string | null;
   fontWeight?: number | "normal" | "bold" | null;
+  fontStyle?: "normal" | "italic" | null;
+  textDecoration?: "none" | "underline" | null;
+  textAlign?: "left" | "center" | "right" | "justify" | null;
+  opacity?: number | null;
+  blendMode?: string | null;
   rotation?: number | null;
   anchor?: { x: number; y: number } | null;
   baselineLength?: number | null;
@@ -203,9 +212,16 @@ export interface PdfTextEditorViewData {
   groupingMode: "auto" | "paragraph" | "singleLine";
   autoScaleText: boolean;
   onAutoScaleTextChange: (value: boolean) => void;
+  serverPreviewEnabled: boolean;
+  onServerPreviewEnabledChange: (value: boolean) => void;
   requestPagePreview: (pageIndex: number, scale: number) => void;
   onSelectPage: (pageIndex: number) => void;
   onGroupEdit: (pageIndex: number, groupId: string, value: string) => void;
+  onGroupFormatChange: (
+    pageIndex: number,
+    groupId: string,
+    format: Partial<TextGroup>,
+  ) => void;
   onGroupDelete: (pageIndex: number, groupId: string) => void;
   onImageTransform: (
     pageIndex: number,
@@ -230,4 +246,16 @@ export interface PdfTextEditorViewData {
   onMergeGroups: (pageIndex: number, groupIds: string[]) => boolean;
   onUngroupGroup: (pageIndex: number, groupId: string) => boolean;
   onLoadFile: (file: File) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onCommitHistory: () => void;
+  onAddText: (pageIndex: number, x: number, y: number, text?: string) => void;
+  onAddImage: (pageIndex: number, file: File, x: number, y: number) => void;
+  onReplaceAll: (
+    search: string,
+    replace: string,
+    matchCase?: boolean,
+  ) => number;
 }

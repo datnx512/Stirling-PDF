@@ -36,4 +36,6 @@ public class PdfJsonTextElement {
     private Integer renderingMode;
     private Boolean fallbackUsed;
     private int[] charCodes;
+    private Float opacity;
+    private String blendMode;
 }

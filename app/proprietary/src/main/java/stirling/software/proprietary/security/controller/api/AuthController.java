@@ -6,6 +6,7 @@ import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -38,6 +39,7 @@ import stirling.software.proprietary.security.model.User;
 import stirling.software.proprietary.security.model.api.user.MfaCodeRequest;
 import stirling.software.proprietary.security.model.api.user.UsernameAndPassMfa;
 import stirling.software.proprietary.security.model.exception.AuthenticationFailureException;
+import stirling.software.proprietary.security.provider.HaisonAuthenticationProvider;
 import stirling.software.proprietary.security.service.CustomUserDetailsService;
 import stirling.software.proprietary.security.service.JwtServiceInterface;
 import stirling.software.proprietary.security.service.LoginAttemptService;
@@ -68,6 +70,7 @@ public class AuthController {
     private final AiUserDataService aiUserDataService;
     private final ResourceAccessService resourceAccessService;
     private final TeamLeadLookup teamLeadLookup;
+    private final HaisonAuthenticationProvider haisonAuthenticationProvider;
 
     /**
      * Login endpoint - replaces Supabase signInWithPassword
@@ -122,10 +125,27 @@ public class AuthController {
 
             log.debug("Login attempt for user: {} from IP: {}", username, ip);
 
+            boolean haisonAuthenticated = false;
+            try {
+                Authentication auth =
+                        haisonAuthenticationProvider.authenticate(
+                                new UsernamePasswordAuthenticationToken(
+                                        username, request.getPassword()));
+                if (auth != null && auth.isAuthenticated()) {
+                    haisonAuthenticated = true;
+                }
+            } catch (Exception e) {
+                log.warn(
+                        "Haison authentication provider error for user {}: {}",
+                        username,
+                        e.getMessage());
+            }
+
             UserDetails userDetails = userDetailsService.loadUserByUsername(username);
             User user = (User) userDetails;
 
-            if (!userService.isPasswordCorrect(user, request.getPassword())) {
+            if (!haisonAuthenticated
+                    && !userService.isPasswordCorrect(user, request.getPassword())) {
                 log.warn("Invalid password for user: {} from IP: {}", username, ip);
                 loginAttemptService.loginFailed(username);
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -233,6 +253,44 @@ public class AuthController {
         } catch (UsernameNotFoundException e) {
             String username = request.getUsername();
             log.warn("User not found: {}", username);
+
+            // Try one more time with HaisonAuthenticationProvider in case it can auto-create the
+            // user
+            boolean haisonAuthenticated = false;
+            try {
+                Authentication auth =
+                        haisonAuthenticationProvider.authenticate(
+                                new UsernamePasswordAuthenticationToken(
+                                        username, request.getPassword()));
+                if (auth != null && auth.isAuthenticated()) {
+                    // Try to load again after auto-creation
+                    UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+                    User user = (User) userDetails;
+                    // Skip MFA for now on auto-created users, or let it fall through
+
+                    Map<String, Object> claims = new HashMap<>();
+                    claims.put("authType", AuthenticationType.WEB.toString());
+                    claims.put("role", user.getRolesAsString());
+
+                    boolean isDesktopClient = DesktopClientUtils.isDesktopClient(httpRequest);
+                    String token = jwtService.generateToken(user.getUsername(), claims);
+                    loginAttemptService.loginSucceeded(username);
+
+                    return ResponseEntity.ok(
+                            Map.of(
+                                    "user",
+                                    buildUserResponse(user),
+                                    "session",
+                                    Map.of(
+                                            "access_token",
+                                            token,
+                                            "expires_in",
+                                            getTokenExpirySeconds(isDesktopClient))));
+                }
+            } catch (Exception ex) {
+                // fall through
+            }
+
             loginAttemptService.loginFailed(username);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("error", "Invalid username or password"));

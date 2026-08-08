@@ -83,7 +83,8 @@ class SecurityConfigurationTest {
                 null,
                 licenseSettingsService,
                 passwordEncoder,
-                aiUserDataService);
+                aiUserDataService,
+                null);
     }
 
     @BeforeEach

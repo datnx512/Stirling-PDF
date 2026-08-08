@@ -2491,40 +2491,59 @@ public class PdfJsonConversionService {
             Map<Integer, List<PdfJsonAnnotation>> annotationsByPage,
             boolean omitResourceStreamData)
             throws IOException {
-        List<PdfJsonPage> pages = new ArrayList<>();
-        int pageIndex = 0;
+
+        List<PDPage> pdPages = new ArrayList<>();
         for (PDPage page : document.getPages()) {
-            PdfJsonPage pageModel = new PdfJsonPage();
-            pageModel.setPageNumber(pageIndex + 1);
-            // Use CropBox if present (defines visible page area), otherwise fall back to MediaBox
-            PDRectangle pageBox = page.getCropBox();
-            if (pageBox == null || pageBox.getWidth() == 0 || pageBox.getHeight() == 0) {
-                pageBox = page.getMediaBox();
-            }
-            pageModel.setWidth(pageBox.getWidth());
-            pageModel.setHeight(pageBox.getHeight());
-            pageModel.setRotation(page.getRotation());
-            pageModel.setTextElements(textByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
-            pageModel.setImageElements(imagesByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
-            pageModel.setAnnotations(
-                    annotationsByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
-            // Serialize resources but exclude image XObject streams to avoid duplication with
-            // imageElements
-            COSBase resourcesBase = page.getCOSObject().getDictionaryObject(COSName.RESOURCES);
-            COSBase filteredResources = filterImageXObjectsFromResources(resourcesBase);
-            if (omitResourceStreamData) {
-                // In lightweight editor mode, omit heavy resource/content stream payloads entirely.
-                // Partial export preserves originals from cached PDF when these fields are missing.
-                pageModel.setResources(null);
-                pageModel.setContentStreams(null);
-            } else {
-                pageModel.setResources(cosMapper.serializeCosValue(filteredResources));
-                pageModel.setContentStreams(extractContentStreams(page, false));
-            }
-            pages.add(pageModel);
-            pageIndex++;
+            pdPages.add(page);
         }
-        return pages;
+
+        return java.util.stream.IntStream.range(0, pdPages.size())
+                .parallel()
+                .mapToObj(
+                        pageIndex -> {
+                            try {
+                                PDPage page = pdPages.get(pageIndex);
+                                PdfJsonPage pageModel = new PdfJsonPage();
+                                pageModel.setPageNumber(pageIndex + 1);
+                                // Use CropBox if present (defines visible page area), otherwise
+                                // fall back to MediaBox
+                                PDRectangle pageBox = page.getCropBox();
+                                if (pageBox == null
+                                        || pageBox.getWidth() == 0
+                                        || pageBox.getHeight() == 0) {
+                                    pageBox = page.getMediaBox();
+                                }
+                                pageModel.setWidth(pageBox.getWidth());
+                                pageModel.setHeight(pageBox.getHeight());
+                                pageModel.setRotation(page.getRotation());
+                                pageModel.setTextElements(
+                                        textByPage.getOrDefault(pageIndex + 1, new ArrayList<>()));
+                                pageModel.setImageElements(
+                                        imagesByPage.getOrDefault(
+                                                pageIndex + 1, new ArrayList<>()));
+                                pageModel.setAnnotations(
+                                        annotationsByPage.getOrDefault(
+                                                pageIndex + 1, new ArrayList<>()));
+                                // Serialize resources but exclude image XObject streams to avoid
+                                // duplication with imageElements
+                                COSBase resourcesBase =
+                                        page.getCOSObject().getDictionaryObject(COSName.RESOURCES);
+                                COSBase filteredResources =
+                                        filterImageXObjectsFromResources(resourcesBase);
+                                if (omitResourceStreamData) {
+                                    pageModel.setResources(null);
+                                    pageModel.setContentStreams(null);
+                                } else {
+                                    pageModel.setResources(
+                                            cosMapper.serializeCosValue(filteredResources));
+                                    pageModel.setContentStreams(extractContentStreams(page, false));
+                                }
+                                return pageModel;
+                            } catch (IOException e) {
+                                throw new java.io.UncheckedIOException(e);
+                            }
+                        })
+                .collect(java.util.stream.Collectors.toList());
     }
 
     private Map<Integer, List<PdfJsonImageElement>> collectImages(
@@ -5174,6 +5193,15 @@ public class PdfJsonConversionService {
                             .zOrder(-1_000_000 + imageCounter)
                             .imageData(encoded.base64())
                             .imageFormat(encoded.format())
+                            .opacity(
+                                    getGraphicsState() != null
+                                            ? (float) getGraphicsState().getNonStrokeAlphaConstant()
+                                            : null)
+                            .blendMode(
+                                    getGraphicsState() != null
+                                                    && getGraphicsState().getBlendMode() != null
+                                            ? getGraphicsState().getBlendMode().toString()
+                                            : null)
                             .build();
             imageCounter++;
             imagesByPage.computeIfAbsent(pageNumber, key -> new ArrayList<>()).add(element);
@@ -5543,6 +5571,9 @@ public class PdfJsonConversionService {
         private Map<PDFont, String> currentFontResources = Collections.emptyMap();
         private int currentZOrderCounter;
 
+        private Map<TextPosition, PdfJsonTextColor> fillColorMap = new IdentityHashMap<>();
+        private Map<TextPosition, PdfJsonTextColor> strokeColorMap = new IdentityHashMap<>();
+
         TextCollectingStripper(
                 PDDocument document,
                 Map<String, PdfJsonFont> fonts,
@@ -5566,6 +5597,18 @@ public class PdfJsonConversionService {
             currentFontResources =
                     pageFontResources.getOrDefault(currentPage, Collections.emptyMap());
             currentZOrderCounter = 0;
+            fillColorMap.clear();
+            strokeColorMap.clear();
+        }
+
+        @Override
+        protected void processTextPosition(TextPosition text) {
+            super.processTextPosition(text);
+            PDGraphicsState graphicsState = getGraphicsState();
+            if (graphicsState != null) {
+                fillColorMap.put(text, toTextColor(graphicsState.getNonStrokingColor()));
+                strokeColorMap.put(text, toTextColor(graphicsState.getStrokingColor()));
+            }
         }
 
         @Override
@@ -5646,9 +5689,13 @@ public class PdfJsonConversionService {
                         element.setRenderingMode(textState.getRenderingMode().intValue());
                     }
                 }
-                element.setFillColor(toTextColor(graphicsState.getNonStrokingColor()));
-                element.setStrokeColor(toTextColor(graphicsState.getStrokingColor()));
+                element.setOpacity((float) graphicsState.getNonStrokeAlphaConstant());
+                if (graphicsState.getBlendMode() != null) {
+                    element.setBlendMode(graphicsState.getBlendMode().toString());
+                }
             }
+            element.setFillColor(fillColorMap.get(position));
+            element.setStrokeColor(strokeColorMap.get(position));
             return element;
         }
 
@@ -6607,6 +6654,23 @@ public class PdfJsonConversionService {
                     jobId,
                     updatedPages.stream().map(i -> i + 1).sorted().toList());
             outputStream.write(updatedBytes);
+        }
+    }
+
+    public void exportUpdatedSinglePage(
+            String jobId, PdfJsonDocument updates, int outputPageNumber, OutputStream outputStream)
+            throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        exportUpdatedPages(jobId, updates, baos);
+        byte[] fullPdf = baos.toByteArray();
+        try (PDDocument doc = pdfDocumentFactory.load(fullPdf, true)) {
+            if (outputPageNumber < 1 || outputPageNumber > doc.getNumberOfPages()) {
+                throw new IllegalArgumentException("Invalid page number: " + outputPageNumber);
+            }
+            try (PDDocument singlePageDoc = new PDDocument()) {
+                singlePageDoc.addPage(doc.getPage(outputPageNumber - 1));
+                singlePageDoc.save(outputStream);
+            }
         }
     }
 

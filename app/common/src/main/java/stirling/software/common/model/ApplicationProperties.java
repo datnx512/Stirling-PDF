@@ -681,6 +681,13 @@ public class ApplicationProperties {
         private Validation validation = new Validation();
         private Timestamp timestamp = new Timestamp();
         private String xFrameOptions = "DENY";
+        private HaisonMainAuth haisonMainAuth = new HaisonMainAuth();
+
+        @Data
+        public static class HaisonMainAuth {
+            private boolean enabled = false;
+            private String url = "https://haison.work/api/login";
+        }
 
         public Boolean isAltLogin() {
             return saml2.getEnabled() || oauth2.getEnabled();

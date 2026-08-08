@@ -5884,11 +5884,15 @@ title = "Confirm Mode Change"
 warning = "Changing the text grouping mode will reset all unsaved changes. Are you sure you want to continue?"
 
 [pdfTextEditor.options.advanced]
-title = "Advanced Settings"
+title = "Show Technical Layout"
 
 [pdfTextEditor.options.autoScaleText]
 description = "Automatically scales text horizontally to fit within its original bounding box when font rendering differs from PDF."
 title = "Auto-scale text to fit boxes"
+
+[pdfTextEditor.options.serverPreview]
+description = "Fetches exactly what the exported PDF will look like from the server, giving 100% fidelity. React text blocks will be hidden when not focused."
+title = "High Fidelity Server Preview"
 
 [pdfTextEditor.options.forceSingleElement]
 description = "When enabled, the editor exports each edited text box as one PDF text element to avoid overlapping glyphs or mixed fonts."
@@ -5933,7 +5937,7 @@ experimental = "This is an experimental feature in active development. Expect so
 feedback = "This is an early access feature. Please report any issues you encounter to help us improve!"
 gotIt = "Got it"
 howItWorks = "This tool converts your PDF to an editable format where you can modify text content and reposition images. Changes are saved back as a new PDF."
-issue1 = "Text color is not currently preserved (will be added soon)"
+issue1 = "Text colour is not currently preserved (will be added soon)"
 issue2 = "Paragraph mode has more alignment and spacing issues - Single Line mode recommended"
 issue3 = "The preview display differs from the exported PDF - exported PDFs are closer to the original"
 issue4 = "Rotated text alignment may need manual adjustment"
@@ -11945,3 +11949,13 @@ confirm = "Extract"
 message_one = "This ZIP contains {{count}} file. Extract anyway?"
 message_other = "This ZIP contains {{count}} files. Extract anyway?"
 title = "Large ZIP File"
+
+[pdfTextEditor.options.searchReplace]
+title = "Search & Replace"
+search = "Search for"
+searchPlaceholder = "Text to find..."
+replace = "Replace with"
+replacePlaceholder = "Replacement text..."
+matchCase = "Match case"
+replaceAll = "Replace All"
+result = "Replaced {{count}} occurrences"

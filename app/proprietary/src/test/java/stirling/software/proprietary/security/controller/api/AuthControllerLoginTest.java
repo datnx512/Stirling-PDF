@@ -86,7 +86,8 @@ class AuthControllerLoginTest {
                         applicationProperties,
                         new stirling.software.proprietary.service.AiUserDataService(null),
                         resourceAccessService,
-                        teamLeadLookup);
+                        teamLeadLookup,
+                        null);
         mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
     }
 

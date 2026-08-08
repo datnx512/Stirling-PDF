@@ -95,6 +95,8 @@ public class SecurityConfiguration {
     private final ClientRegistrationRepository clientRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final stirling.software.proprietary.service.AiUserDataService aiUserDataService;
+    private final stirling.software.proprietary.security.provider.HaisonAuthenticationProvider
+            haisonAuthenticationProvider;
 
     public SecurityConfiguration(
             PersistentLoginRepository persistentLoginRepository,
@@ -118,7 +120,9 @@ public class SecurityConfiguration {
             @Autowired(required = false) ClientRegistrationRepository clientRegistrationRepository,
             stirling.software.proprietary.service.UserLicenseSettingsService licenseSettingsService,
             PasswordEncoder passwordEncoder,
-            stirling.software.proprietary.service.AiUserDataService aiUserDataService) {
+            stirling.software.proprietary.service.AiUserDataService aiUserDataService,
+            stirling.software.proprietary.security.provider.HaisonAuthenticationProvider
+                    haisonAuthenticationProvider) {
         this.userDetailsService = userDetailsService;
         this.userService = userService;
         this.loginEnabledValue = loginEnabledValue;
@@ -139,6 +143,7 @@ public class SecurityConfiguration {
         this.licenseSettingsService = licenseSettingsService;
         this.passwordEncoder = passwordEncoder;
         this.aiUserDataService = aiUserDataService;
+        this.haisonAuthenticationProvider = haisonAuthenticationProvider;
     }
 
     /**
@@ -306,6 +311,7 @@ public class SecurityConfiguration {
 
             http.sessionManagement(
                     sessionManagement -> sessionManagement.sessionCreationPolicy(sessionPolicy));
+            http.authenticationProvider(haisonAuthenticationProvider);
             http.authenticationProvider(daoAuthenticationProvider());
             http.requestCache(requestCache -> requestCache.requestCache(new NullRequestCache()));
 

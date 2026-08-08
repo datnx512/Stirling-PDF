@@ -48,6 +48,7 @@ import {
   getImageBounds,
   pageDimensions,
 } from "@app/tools/pdfTextEditor/pdfTextEditorUtils";
+import { useMarqueeSelection } from "@app/components/tools/pdfTextEditor/hooks/useMarqueeSelection";
 
 const MAX_RENDER_WIDTH = 820;
 const MIN_BOX_SIZE = 18;
@@ -276,7 +277,8 @@ const buildFontLookupKeys = (
 
 /**
  * Analyzes text groups on a page to determine if it's paragraph-heavy or sparse.
- * Returns true if the page appears to be document-like with substantial text content.
+ * Returns true only if the page is clearly a standard flowing-text document.
+ * Returns false for technical docs, multi-column, mixed-layout pages.
  */
 const analyzePageContentType = (
   groups: TextGroup[],
@@ -291,6 +293,10 @@ const analyzePageContentType = (
   const wordCounts: number[] = [];
   const fullWidthThreshold = pageWidth * 0.7;
 
+  // Track horizontal positions to detect multi-column or scattered layouts
+  const leftPositions: number[] = [];
+  let shortGroups = 0; // groups with <= 3 words (labels, headings, codes)
+
   groups.forEach((group) => {
     const text = (group.text || "").trim();
     if (text.length === 0) return;
@@ -300,6 +306,11 @@ const analyzePageContentType = (
 
     totalWords += wordCount;
     wordCounts.push(wordCount);
+    leftPositions.push(group.bounds.left);
+
+    if (wordCount <= 3) {
+      shortGroups++;
+    }
 
     // Count text groups with substantial content (≥10 words or ≥50 chars)
     if (wordCount >= 10 || text.length >= 50) {
@@ -318,6 +329,7 @@ const analyzePageContentType = (
   const avgWordsPerGroup = totalWords / totalGroups;
   const longTextRatio = longTextGroups / totalGroups;
   const fullWidthRatio = fullWidthLines / totalGroups;
+  const shortGroupRatio = shortGroups / totalGroups;
 
   // Calculate variance in line lengths
   const variance =
@@ -328,6 +340,28 @@ const analyzePageContentType = (
   const stdDev = Math.sqrt(variance);
   const coefficientOfVariation =
     avgWordsPerGroup > 0 ? stdDev / avgWordsPerGroup : 0;
+
+  // Spatial dispersion: if left-edge positions vary widely, it's a complex layout
+  // (e.g., multi-column, technical drawings with labels, forms)
+  let leftDispersion = 0;
+  if (leftPositions.length > 1 && pageWidth > 0) {
+    const avgLeft =
+      leftPositions.reduce((a, b) => a + b, 0) / leftPositions.length;
+    const leftVariance =
+      leftPositions.reduce((sum, pos) => {
+        const diff = pos - avgLeft;
+        return sum + diff * diff;
+      }, 0) / leftPositions.length;
+    leftDispersion = Math.sqrt(leftVariance) / pageWidth;
+  }
+
+  // Heuristic guards: early exit for clearly non-paragraph layouts
+  // 1. Too many short groups (technical labels, headings) → not paragraph
+  if (shortGroupRatio > 0.5) return false;
+  // 2. High spatial dispersion → multi-column or complex layout → not paragraph
+  if (leftDispersion > 0.15) return false;
+  // 3. Too few full-width lines despite having content → sparse layout
+  if (fullWidthRatio < 0.2 && longTextGroups < 3) return false;
 
   // All 3 criteria must pass for paragraph mode
   const criterion1 = avgWordsPerGroup > 5;
@@ -482,6 +516,29 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
     setSelectedGroupIds(new Set());
     lastSelectedGroupIdRef.current = null;
   }, []);
+
+  const handleSelectionComplete = useCallback(
+    (selectedIds: string[], append: boolean) => {
+      if (selectedIds.length === 0) {
+        if (!append) clearSelection();
+        return;
+      }
+
+      if (append) {
+        setSelectedGroupIds((prev) => {
+          const next = new Set(prev);
+          selectedIds.forEach((id) => next.add(id));
+          return next;
+        });
+      } else {
+        setSelectedGroupIds(new Set(selectedIds));
+        if (selectedIds.length > 0) {
+          setActiveGroupId(selectedIds[0]);
+        }
+      }
+    },
+    [clearSelection],
+  );
 
   useEffect(() => {
     widthOverridesRef.current = widthOverrides;
@@ -1162,6 +1219,13 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
   }, [pageWidth, pageHeight]);
   const scaledWidth = pageWidth * scale;
   const scaledHeight = pageHeight * scale;
+
+  const marqueeBox = useMarqueeSelection({
+    containerRef,
+    pageGroups: data.groupsByPage[selectedPage] || [],
+    scale,
+    onSelectionComplete: handleSelectionComplete,
+  });
   const selectionToolbarPosition = useMemo(() => {
     if (!hasSelection) {
       return null;
@@ -2093,6 +2157,30 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
                           pointerEvents: "none",
                           userSelect: "none",
                           zIndex: 0,
+                          opacity:
+                            autoScaleText && data.serverPreviewEnabled
+                              ? 1
+                              : 0.15,
+                        }}
+                        onMouseDown={(_event) => {
+                          // Allow click to fall through to container
+                        }}
+                        onDragStart={(event) => event.preventDefault()}
+                      />
+                    )}
+
+                    {marqueeBox && (
+                      <Box
+                        style={{
+                          position: "absolute",
+                          left: marqueeBox.x,
+                          top: marqueeBox.y,
+                          width: marqueeBox.width,
+                          height: marqueeBox.height,
+                          backgroundColor: "rgba(59, 130, 246, 0.2)",
+                          border: "1px solid rgba(59, 130, 246, 0.8)",
+                          pointerEvents: "none",
+                          zIndex: 9999,
                         }}
                       />
                     )}
@@ -2442,12 +2530,38 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
                           group.text.split("\n").length,
                           1,
                         );
-                        const paragraphHeightPx =
-                          lineCount > 1
-                            ? lineHeightPx +
-                              (lineCount - 1) *
-                                (detectedSpacingPx ?? lineHeightPx)
-                            : lineHeightPx;
+
+                        // For multi-line paragraph groups, derive height from
+                        // actual childLineGroups baselines when available.
+                        // This avoids relying on the merged bounding box which can
+                        // be inflated when grouping was done across sections.
+                        let paragraphHeightPx: number;
+                        if (
+                          lineCount > 1 &&
+                          group.childLineGroups &&
+                          group.childLineGroups.length >= 2
+                        ) {
+                          const children = group.childLineGroups;
+                          const firstBaseline =
+                            children[0].baseline ?? children[0].bounds.bottom;
+                          const lastBaseline =
+                            children[children.length - 1].baseline ??
+                            children[children.length - 1].bounds.bottom;
+                          const baselineSpanPx =
+                            Math.abs(firstBaseline - lastBaseline) * scale;
+                          // Add one line-height for the last line's descenders
+                          paragraphHeightPx = Math.max(
+                            baselineSpanPx + lineHeightPx,
+                            lineCount * lineHeightPx,
+                          );
+                        } else {
+                          paragraphHeightPx =
+                            lineCount > 1
+                              ? lineHeightPx +
+                                (lineCount - 1) *
+                                  (detectedSpacingPx ?? lineHeightPx)
+                              : lineHeightPx;
+                        }
 
                         let containerLeft = bounds.left;
                         let containerTop = bounds.top;
@@ -2460,10 +2574,12 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
                           resolvedWidth * scale,
                           fontSizePx,
                         );
-                        let containerHeight = Math.max(
-                          bounds.height,
-                          paragraphHeightPx,
-                        );
+                        // Use paragraphHeightPx as primary source for multi-line
+                        // groups to avoid the inflated merged bounds.height.
+                        let containerHeight =
+                          lineCount > 1
+                            ? paragraphHeightPx
+                            : Math.max(bounds.height, paragraphHeightPx);
                         let transform: string | undefined;
                         let transformOrigin: React.CSSProperties["transformOrigin"];
 
@@ -2505,6 +2621,28 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
                             containerHeight,
                             ascentPx + descentPx,
                           );
+                        } else if (
+                          lineCount > 1 &&
+                          !hasRotation &&
+                          group.childLineGroups &&
+                          group.childLineGroups.length >= 1 &&
+                          geometry
+                        ) {
+                          // For multi-line groups, anchor the top at the first
+                          // child line's baseline so the box starts at the right
+                          // vertical position rather than using the inflated
+                          // merged bounding box top.
+                          const firstChild = group.childLineGroups[0];
+                          const firstBaseline =
+                            firstChild.baseline ?? firstChild.bounds.bottom;
+                          const cssBaselineTop =
+                            (pageHeight - firstBaseline) * scale;
+                          const newTop = Math.max(cssBaselineTop - ascentPx, 0);
+                          // Only apply if it's significantly different from
+                          // the current containerTop (> 2px) to avoid regressions
+                          if (Math.abs(newTop - containerTop) > 2) {
+                            containerTop = newTop;
+                          }
                         }
 
                         // Extract styling from group

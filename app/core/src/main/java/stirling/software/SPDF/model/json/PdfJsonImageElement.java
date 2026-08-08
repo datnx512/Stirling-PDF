@@ -31,4 +31,6 @@ public class PdfJsonImageElement {
     private Integer zOrder;
     private String imageData;
     private String imageFormat;
+    private Float opacity;
+    private String blendMode;
 }

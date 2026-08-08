@@ -220,6 +220,54 @@ public class ConvertPdfJsonController {
         }
     }
 
+    @AutoJobPostMapping(
+            value = "/pdf/text-editor/partial-page/{jobId}/{pageNumber}",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            resourceWeight = ResourceWeight.MEDIUM_WEIGHT)
+    @StandardPdfResponse
+    @Operation(
+            summary = "Apply incremental edits and return a single updated page",
+            description =
+                    "Applies edits to a cached PDF and returns ONLY the specified page as a new PDF."
+                            + " Requires the PDF to have been previously cached via the text editor metadata endpoint."
+                            + " The jobId must be obtained from the metadata extraction endpoint.")
+    public ResponseEntity<Resource> exportPartialPagePdf(
+            @PathVariable String jobId,
+            @PathVariable int pageNumber,
+            @RequestBody PdfJsonDocument document,
+            @RequestParam(value = "filename", required = false) String filename)
+            throws Exception {
+        if (document == null) {
+            throw ExceptionUtils.createNullArgumentException("document");
+        }
+
+        validateJobAccess(jobId);
+
+        String baseName =
+                (filename != null && !filename.isBlank())
+                        ? FILE_EXTENSION_PATTERN
+                                .matcher(Filenames.toSimpleFileName(filename))
+                                .replaceFirst("")
+                        : Optional.ofNullable(document.getMetadata())
+                                .map(PdfJsonMetadata::getTitle)
+                                .filter(title -> title != null && !title.isBlank())
+                                .orElse("document");
+        String docName = baseName.endsWith(".pdf") ? baseName : baseName + ".pdf";
+        TempFile tempOut = tempFileManager.createManagedTempFile(".pdf");
+        try (OutputStream os = Files.newOutputStream(tempOut.getPath())) {
+            pdfJsonConversionService.exportUpdatedSinglePage(jobId, document, pageNumber, os);
+        } catch (Exception e) {
+            tempOut.close();
+            throw e;
+        }
+        try {
+            return WebResponseUtils.pdfFileToWebResponse(tempOut, docName);
+        } catch (Exception e) {
+            tempOut.close();
+            throw e;
+        }
+    }
+
     @GetMapping(value = "/pdf/text-editor/page/{jobId}/{pageNumber}")
     @Operation(
             summary = "Extract single page from cached PDF for text editor",
