@@ -7,6 +7,7 @@ import "@mantine/core/styles.css";
 import "@mantine/dates/styles.css";
 import "../vite-env.d.ts"; // eslint-disable-line no-restricted-imports -- Outside app paths
 import "@app/styles/index.css"; // Import global styles
+import "@app/styles/mobile-pwa.css"; // Mobile PWA: safe-area, touch, responsive
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ColorSchemeScript } from "@mantine/core";

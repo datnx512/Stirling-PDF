@@ -1,6 +1,8 @@
 {
+  "id": "/",
   "short_name": "Stirling PDF",
-  "name": "Stirling PDF",
+  "name": "Stirling PDF — Free PDF Editor",
+  "description": "The Free Adobe Acrobat alternative. Edit text, merge, split, convert, sign PDFs.",
   "icons": [
     {
       "src": "modern-logo/favicon.ico",
@@ -10,16 +12,44 @@
     {
       "src": "modern-logo/logo192.png",
       "type": "image/png",
-      "sizes": "192x192"
+      "sizes": "192x192",
+      "purpose": "any maskable"
     },
     {
       "src": "modern-logo/logo512.png",
       "type": "image/png",
-      "sizes": "512x512"
+      "sizes": "512x512",
+      "purpose": "any maskable"
     }
   ],
   "start_url": ".",
+  "scope": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "theme_color": "#1a1c1e",
+  "background_color": "#ffffff",
+  "categories": ["productivity", "utilities"],
+  "lang": "en-US",
+  "dir": "ltr",
+  "shortcuts": [
+    {
+      "name": "Text Editor",
+      "short_name": "Editor",
+      "description": "Edit text in PDF files",
+      "url": "?tool=pdfTextEditor"
+    },
+    {
+      "name": "Merge PDFs",
+      "short_name": "Merge",
+      "description": "Combine multiple PDF files",
+      "url": "?tool=merge"
+    },
+    {
+      "name": "Sign PDF",
+      "short_name": "Sign",
+      "description": "Add signature to PDF",
+      "url": "?tool=sign"
+    }
+  ]
 }

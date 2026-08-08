@@ -4089,8 +4089,7 @@ public class PdfJsonConversionService {
         }
         // Skip rewriting if none of the consumed elements were modified —
         // preserve the original COSString byte-for-byte
-        boolean anyModified =
-                consumed.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
+        boolean anyModified = consumed.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
         if (!anyModified) {
             return true; // keep original bytes intact
         }
@@ -6645,8 +6644,7 @@ public class PdfJsonConversionService {
                 boolean hasModifiedText =
                         pageModel.getTextElements() != null
                                 && pageModel.getTextElements().stream()
-                                        .anyMatch(
-                                                e -> Boolean.TRUE.equals(e.getModified()));
+                                        .anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
                 boolean hasImages =
                         pageModel.getImageElements() != null
                                 && !pageModel.getImageElements().isEmpty();
@@ -6931,7 +6929,8 @@ public class PdfJsonConversionService {
         // Check if any text elements were actually modified by the user
         boolean hasModifiedText =
                 textElements != null
-                        && textElements.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
+                        && textElements.stream()
+                                .anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
 
         // If no text was modified, we can try to reuse the existing content stream
         // even when images are present — images are preserved via contentStreams/resources.

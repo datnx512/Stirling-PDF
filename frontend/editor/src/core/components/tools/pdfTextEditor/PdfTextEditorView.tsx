@@ -51,6 +51,7 @@ import {
 import { useMarqueeSelection } from "@app/components/tools/pdfTextEditor/hooks/useMarqueeSelection";
 
 const MAX_RENDER_WIDTH = 820;
+const MIN_RENDER_WIDTH = 280;
 const MIN_BOX_SIZE = 18;
 
 const normalizeFontFormat = (format?: string | null): string => {
@@ -1206,15 +1207,14 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
     [pageImages],
   );
   const scale = useMemo(() => {
-    const calculatedScale = Math.min(MAX_RENDER_WIDTH / pageWidth, 2.5);
-    console.log(`🔍 [PdfTextEditor] Scale Calculation:`, {
-      MAX_RENDER_WIDTH,
-      pageWidth,
-      pageHeight,
-      calculatedScale: calculatedScale.toFixed(3),
-      scaledWidth: (pageWidth * calculatedScale).toFixed(2),
-      scaledHeight: (pageHeight * calculatedScale).toFixed(2),
-    });
+    // On mobile, constrain render width to viewport minus padding
+    const viewportWidth =
+      typeof window !== "undefined" ? window.innerWidth : MAX_RENDER_WIDTH;
+    const isMobile = viewportWidth <= 768;
+    const effectiveMaxWidth = isMobile
+      ? Math.max(viewportWidth - 32, MIN_RENDER_WIDTH)
+      : MAX_RENDER_WIDTH;
+    const calculatedScale = Math.min(effectiveMaxWidth / pageWidth, 2.5);
     return calculatedScale;
   }, [pageWidth, pageHeight]);
   const scaledWidth = pageWidth * scale;
@@ -1699,7 +1699,7 @@ const PdfTextEditorView = ({ data }: PdfTextEditorViewProps) => {
       gap="xl"
       className="h-full"
       style={{
-        padding: "1.5rem",
+        padding: "clamp(0.5rem, 3vw, 1.5rem)",
         overflow: "hidden",
         height: "100%",
         display: "flex",

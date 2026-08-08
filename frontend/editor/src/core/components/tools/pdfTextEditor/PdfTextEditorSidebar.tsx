@@ -77,6 +77,7 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
   const [replaceQuery, setReplaceQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [lastReplaceCount, setLastReplaceCount] = useState<number | null>(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const pdfTextEditorTips = usePdfTextEditorTips();
 
@@ -138,7 +139,74 @@ const PdfTextEditorSidebar = ({ data }: PdfTextEditorSidebarProps) => {
 
   return (
     <>
-      <Stack style={{ height: "100%", display: "flex" }} gap={0}>
+      {/* Mobile toggle button — floating, opens sidebar as bottom sheet */}
+      <button
+        className="pdf-editor-mobile-toggle"
+        onClick={() => setMobileSidebarOpen(true)}
+        aria-label={t("pdfTextEditor.title", "PDF Text Editor settings")}
+        style={{
+          display: "none",
+          position: "fixed",
+          bottom: "calc(50dvh + env(safe-area-inset-bottom, 0px) + 8px)",
+          right: "12px",
+          zIndex: 300,
+          width: 48,
+          height: 48,
+          borderRadius: "50%",
+          border: "none",
+          background: "var(--mantine-color-blue-6, #228be6)",
+          color: "white",
+          fontSize: 24,
+          cursor: "pointer",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+          alignItems: "center",
+          justifyContent: "center",
+          touchAction: "manipulation",
+        }}
+      >
+        ⚙
+      </button>
+
+      {/* Mobile backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          onClick={() => setMobileSidebarOpen(false)}
+          style={{
+            display: "none",
+            position: "fixed",
+            inset: 0,
+            zIndex: 199,
+            background: "rgba(0,0,0,0.4)",
+          }}
+        />
+      )}
+
+      <Stack
+        className={`pdf-editor-sidebar ${mobileSidebarOpen ? "pdf-editor-sidebar--open" : ""}`}
+        style={{ height: "100%", display: "flex" }}
+        gap={0}
+      >
+        {/* Mobile close handle */}
+        <div
+          className="pdf-editor-mobile-handle"
+          onClick={() => setMobileSidebarOpen(false)}
+          style={{
+            display: "none",
+            padding: "8px 16px 4px",
+            justifyContent: "center",
+            cursor: "pointer",
+          }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 4,
+              borderRadius: 2,
+              background: "var(--mantine-color-gray-4, #ced4da)",
+            }}
+          />
+        </div>
+
         <ScrollArea style={{ flex: 1 }} offsetScrollbars>
           <Stack gap="md">
             <Stack gap="xs" pl="md" pr={0} pt="md">
