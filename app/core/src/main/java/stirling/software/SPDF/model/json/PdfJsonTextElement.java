@@ -38,4 +38,11 @@ public class PdfJsonTextElement {
     private int[] charCodes;
     private Float opacity;
     private String blendMode;
+
+    /**
+     * Frontend flag: true when text content was modified by the user.
+     * Used by the backend to skip rewriting unchanged Tj/TJ operators,
+     * preserving the original content stream byte-for-byte for unchanged text.
+     */
+    private Boolean modified;
 }

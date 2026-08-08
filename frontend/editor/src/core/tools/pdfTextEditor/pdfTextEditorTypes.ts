@@ -69,6 +69,9 @@ export interface PdfJsonTextElement {
   fallbackUsed?: boolean | null;
   opacity?: number | null;
   blendMode?: string | null;
+  /** Frontend-only flag: true when text content was modified by the user.
+   *  Used by the backend to skip rewriting unchanged Tj/TJ operators. */
+  _modified?: boolean | null;
 }
 
 export interface PdfJsonImageElement {

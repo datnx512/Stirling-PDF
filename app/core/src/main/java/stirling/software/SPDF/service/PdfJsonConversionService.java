@@ -4087,6 +4087,13 @@ public class PdfJsonConversionService {
             tokens.set(tokenIndex, new COSString(new byte[0]));
             return true;
         }
+        // Skip rewriting if none of the consumed elements were modified —
+        // preserve the original COSString byte-for-byte
+        boolean anyModified =
+                consumed.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
+        if (!anyModified) {
+            return true; // keep original bytes intact
+        }
         MergedText replacement = mergeText(consumed);
         try {
             byte[] encoded =
@@ -4094,19 +4101,23 @@ public class PdfJsonConversionService {
                             font, fontModel, replacement.text(), replacement.charCodes());
             if (encoded == null) {
                 log.debug(
-                        "Failed to map replacement text to glyphs for font {} (text='{}')",
+                        "Failed to map replacement text to glyphs for font {} (text='{}') — keeping original bytes",
                         expectedFontName,
                         replacement.text());
-                return false;
+                // Instead of aborting the entire page rewrite, keep the original
+                // COSString for this Tj operator. This preserves structure for
+                // all other operators on the page.
+                return true;
             }
             tokens.set(tokenIndex, new COSString(encoded));
             return true;
         } catch (IOException | IllegalArgumentException | UnsupportedOperationException ex) {
             log.debug(
-                    "Failed to encode replacement text with font {}: {}",
+                    "Failed to encode replacement text with font {} — keeping original bytes: {}",
                     expectedFontName,
                     ex.getMessage());
-            return false;
+            // Keep original COSString — don't abort the entire rewrite
+            return true;
         }
     }
 
@@ -4142,6 +4153,13 @@ public class PdfJsonConversionService {
                     array.set(i, new COSString(new byte[0]));
                     continue;
                 }
+                // Skip rewriting this TJ segment if none of the consumed
+                // elements were modified — preserve original bytes
+                boolean anyModified =
+                        consumed.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
+                if (!anyModified) {
+                    continue; // keep original COSString intact
+                }
                 MergedText replacement = mergeText(consumed);
                 try {
                     byte[] encoded =
@@ -4149,21 +4167,23 @@ public class PdfJsonConversionService {
                                     font, fontModel, replacement.text(), replacement.charCodes());
                     if (encoded == null) {
                         log.debug(
-                                "Failed to map replacement text in TJ array for font {} segment {}",
+                                "Failed to map replacement text in TJ array for font {} segment {} — keeping original bytes",
                                 expectedFontName,
                                 i);
-                        return false;
+                        // Keep original COSString for this segment, continue with rest
+                        continue;
                     }
                     array.set(i, new COSString(encoded));
                 } catch (IOException
                         | IllegalArgumentException
                         | UnsupportedOperationException ex) {
                     log.debug(
-                            "Failed to encode replacement text in TJ array for font {} segment {}: {}",
+                            "Failed to encode replacement text in TJ array for font {} segment {} — keeping original bytes: {}",
                             expectedFontName,
                             i,
                             ex.getMessage());
-                    return false;
+                    // Keep original COSString — don't abort
+                    continue;
                 }
             }
         }
@@ -6619,6 +6639,25 @@ public class PdfJsonConversionService {
                             jobId);
                     continue;
                 }
+
+                // Skip pages with no modified text elements and no image changes —
+                // preserve the original page byte-for-byte
+                boolean hasModifiedText =
+                        pageModel.getTextElements() != null
+                                && pageModel.getTextElements().stream()
+                                        .anyMatch(
+                                                e -> Boolean.TRUE.equals(e.getModified()));
+                boolean hasImages =
+                        pageModel.getImageElements() != null
+                                && !pageModel.getImageElements().isEmpty();
+                if (!hasModifiedText && !hasImages) {
+                    log.debug(
+                            "Skipping unmodified page {} for jobId {} (no modified elements)",
+                            pageNumber,
+                            jobId);
+                    continue;
+                }
+
                 PDPage page = document.getPage(pageIndex);
                 replacePageContentFromModel(
                         document, page, pageModel, fontMap, fontModelsCopy, pageNumber);
@@ -6889,11 +6928,26 @@ public class PdfJsonConversionService {
             return RegenerateMode.REGENERATE_CLEAR;
         }
 
-        if (hasImages) {
-            return RegenerateMode.REGENERATE_WITH_VECTOR_OVERLAY;
+        // Check if any text elements were actually modified by the user
+        boolean hasModifiedText =
+                textElements != null
+                        && textElements.stream().anyMatch(e -> Boolean.TRUE.equals(e.getModified()));
+
+        // If no text was modified, we can try to reuse the existing content stream
+        // even when images are present — images are preserved via contentStreams/resources.
+        if (hasText && !hasModifiedText && !preflightResult.usesFallback()) {
+            // No text changes: try token rewrite (which will be a no-op for text,
+            // but validates that the stream structure is intact)
+            boolean rewriteSucceeded =
+                    rewriteTextOperators(
+                            document, page, textElements, false, true, fontLookup, pageNumberValue);
+            if (rewriteSucceeded) {
+                return RegenerateMode.REUSE_EXISTING;
+            }
+            // Fall through to vector overlay if rewrite fails
         }
 
-        if (hasText && !preflightResult.usesFallback()) {
+        if (hasModifiedText && !preflightResult.usesFallback()) {
             boolean rewriteSucceeded =
                     rewriteTextOperators(
                             document, page, textElements, false, true, fontLookup, pageNumberValue);
@@ -6901,6 +6955,11 @@ public class PdfJsonConversionService {
                 return RegenerateMode.REUSE_EXISTING;
             }
             return RegenerateMode.REGENERATE_WITH_VECTOR_OVERLAY;
+        }
+
+        // Images present but no text modified — preserve existing content
+        if (hasImages && !hasModifiedText) {
+            return RegenerateMode.REUSE_EXISTING;
         }
 
         return RegenerateMode.REGENERATE_WITH_VECTOR_OVERLAY;

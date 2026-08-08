@@ -1390,12 +1390,16 @@ export const restoreGlyphElements = (
         // Always try to rebuild paragraph lines if text has newlines
         const paragraphElements = rebuildParagraphLineElements(group);
         if (paragraphElements && paragraphElements.length > 0) {
+          // Mark rebuilt elements as modified so backend knows to rewrite them
+          paragraphElements.forEach((el) => (el._modified = true));
           rebuiltElements.push(...paragraphElements);
           return;
         }
         // If no newlines or rebuilding failed, check if we should force merge
         if (forceMergedGroups) {
-          rebuiltElements.push(createMergedElement(group));
+          const merged = createMergedElement(group);
+          merged._modified = true;
+          rebuiltElements.push(merged);
           return;
         }
         const originalGlyphCount = group.originalElements.reduce(
@@ -1406,7 +1410,9 @@ export const restoreGlyphElements = (
         const targetGlyphCount = countGraphemes(normalizedText);
 
         if (targetGlyphCount !== originalGlyphCount) {
-          rebuiltElements.push(createMergedElement(group));
+          const merged = createMergedElement(group);
+          merged._modified = true;
+          rebuiltElements.push(merged);
           return;
         }
 
@@ -1416,13 +1422,18 @@ export const restoreGlyphElements = (
           originals,
         );
         if (distributed) {
+          // Mark distributed elements as modified
+          originals.forEach((el) => (el._modified = true));
           rebuiltElements.push(...originals);
         } else {
-          rebuiltElements.push(createMergedElement(group));
+          const merged = createMergedElement(group);
+          merged._modified = true;
+          rebuiltElements.push(merged);
         }
         return;
       }
 
+      // Unchanged groups: push originals WITHOUT _modified flag
       rebuiltElements.push(...group.originalElements.map(cloneTextElement));
     });
 
@@ -1525,6 +1536,20 @@ export const getDirtyPages = (
     // Check if any text was modified
     const textDirty = groups.some((group) => group.text !== group.originalText);
 
+    // Check if any group formatting was modified (opacity, blendMode, fontStyle, etc.)
+    const formatDirty = groups.some((group) => {
+      const orig =
+        originalGroupsByPage[index]?.find((g) => g.id === group.id);
+      if (!orig) return true; // new group = dirty
+      return (
+        group.opacity !== orig.opacity ||
+        group.blendMode !== orig.blendMode ||
+        group.fontStyle !== orig.fontStyle ||
+        group.textDecoration !== orig.textDecoration ||
+        group.textAlign !== orig.textAlign
+      );
+    });
+
     // Check if any groups were deleted by comparing with original groups
     const originalGroups = originalGroupsByPage[index] ?? [];
     const groupCountChanged = groups.length !== originalGroups.length;
@@ -1534,11 +1559,12 @@ export const getDirtyPages = (
       originalImagesByPage[index] ?? [],
     );
 
-    const isDirty = textDirty || groupCountChanged || imageDirty;
+    const isDirty = textDirty || formatDirty || groupCountChanged || imageDirty;
 
-    if (groupCountChanged || textDirty) {
+    if (groupCountChanged || textDirty || formatDirty) {
       console.log(`📄 Page ${index} dirty check:`, {
         textDirty,
+        formatDirty,
         groupCountChanged,
         originalGroupsLength: originalGroups.length,
         currentGroupsLength: groups.length,
